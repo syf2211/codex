@@ -66,6 +66,7 @@ use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
+use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::Tool as RmcpTool;
 use tokio::time::Instant as TokioInstant;
@@ -568,22 +569,38 @@ pub(crate) async fn list_tools_for_client_uncached(
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
-        .await?;
-    let tools = resp
-        .tools
-        .into_iter()
-        .map(|tool| {
+    let mut collected = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let params = cursor.as_ref().map(|next| {
+            PaginatedRequestParams::default().with_cursor(Some(next.clone()))
+        });
+        let resp = client
+            .list_tools_with_connector_ids(params, timeout)
+            .await?;
+
+        collected.extend(resp.tools.into_iter().map(|tool| {
             tool_info_from_listed_tool(
                 server_name,
                 is_codex_apps_mcp_server,
                 server_instructions,
                 tool,
             )
-        })
-        .collect();
-    Ok(tools)
+        }));
+
+        match resp.next_cursor {
+            Some(next) => {
+                if cursor.as_ref() == Some(&next) {
+                    return Err(anyhow!(
+                        "tools/list returned duplicate cursor for MCP server '{server_name}'"
+                    ));
+                }
+                cursor = Some(next);
+            }
+            None => return Ok(collected),
+        }
+    }
 }
 
 /// Presents declared Codex Apps file parameters to the model as local-path inputs and adds plugin
